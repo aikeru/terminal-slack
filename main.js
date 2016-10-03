@@ -3,6 +3,7 @@ var ui = require('./userInterface.js'),
     fs = require('fs'),
     components = ui.init(), // ui components
     users,
+    currentUser,
     channels,
     currentChannelId,
 
@@ -15,7 +16,7 @@ var ui = require('./userInterface.js'),
     })();
 
 slack.init(function(data, ws) {
-    var currentUser = data.self;
+    currentUser = data.self;
 
     // don't update focus until ws is connected
     // focus on the channel list
@@ -58,6 +59,29 @@ slack.init(function(data, ws) {
             text: text
         }));
     });
+
+    //msnead get user list from slack per passables
+    // set the user list to the users returned from slack
+     // call here to check against currentUser
+     slack.getUsers(function(error, response, data){
+         if (error || response.statusCode != 200) {
+             console.log('Error: ', error, response || response.statusCode);
+             return;
+         }
+ 
+         data = JSON.parse(data);
+         users = [];
+         for(var i = 0; i < data.members.length; i++) {
+           //msnead made this a local decl
+             var user = data.members[i];
+             if(!user.deleted && user.id != currentUser.id) users.push(user);
+         }
+         components.userList.setItems(
+            users.map(function(user) {
+                return user.name;
+            })
+         );
+     });
 });
 
 // set the channel list
@@ -65,14 +89,20 @@ components.channelList.setItems(['Connecting to Slack...']);
 components.screen.render();
 
 // set the channel list to the channels returned from slack
-slack.getChannels(function(error, response, data){
+slack.getChannels(function(error, response, data, groupData){
     if (error || response.statusCode != 200) {
         console.log('Error: ', error, response || response.statusCode);
         return;
     }
 
     data = JSON.parse(data);
-    channels = data.channels;
+    groupData = JSON.parse(groupData);
+    data.channels = data.channels.concat(groupData.groups.map((group) => {
+     group.isGroup = true;
+     return group;
+    }));
+    //msnead don't show archived channels
+    channels = data.channels.filter((chan) => !chan.is_archived);
     components.channelList.setItems(
         channels.map(function(channel) {
             return channel.name;
@@ -81,9 +111,81 @@ slack.getChannels(function(error, response, data){
 });
 
 // get list of users
-slack.getUsers(function(response, error, data){
-    users = JSON.parse(data).members;
-});
+//msnead commented this out per passables
+//slack.getUsers(function(response, error, data){
+    //users = JSON.parse(data).members;
+//});
+
+updateMessages = function(data, markFn) {
+     components.chatWindow.deleteTop(); // remove loading message
+ 
+     // filter and map the messages before displaying them
+     data.messages
+         .filter(function(item) {
+             return (item.type === 'message');
+         })
+         .map(function(message) {
+             var len = users.length,
+                 username;
+ 
+             // get the author
+             if(message.user === currentUser.id) username = currentUser.name
+             else
+                 for(var i=0; i < len; i++) {
+                     if (message.user === users[i].id) {
+                         username = users[i].name;
+                         break;
+                     }
+                 }
+ 
+             return {text: message.text, username: username};
+         })
+         .forEach(function(message) {
+             // add messages to window
+             components.chatWindow.unshiftLine(
+                 '{bold}' + message.username + '{/bold}: ' + message.text
+             );
+         });
+ 
+     // mark the most recently read message
+     markFn(currentChannelId, data.messages[0].ts);
+ 
+     // reset messageInput and give focus
+     components.messageInput.clearValue();
+     components.chatWindow.scrollTo(components.chatWindow.getLines().length);
+     components.messageInput.focus();
+     components.screen.render();
+ };
+console.log('Components userlist?',!!components.userList);
+ components.userList.on('select', function(data) {
+     var userName = data.content;
+ 
+     // a channel was selected
+     components.mainWindowTitle.setContent('{bold}' + userName + '{/bold}');
+     components.chatWindow.setContent('Getting messages...');
+     components.screen.render();
+ 
+     // get user's id
+     var userId = '';
+     for(var i = 0; i < users.length; i++) {
+         user = users[i];
+         if(user.name === userName) {
+             userId = user.id;
+             break;
+         }
+     }
+     slack.openIm(userId, function(error, response, data){
+         data = JSON.parse(data);
+         currentChannelId = data.channel.id;
+ 
+         // load im history
+         slack.getImHistory(currentChannelId, function(error, response, data) {
+             data = JSON.parse(data);
+             updateMessages(data, slack.markIm);
+         });
+     });
+ });
+
 
 // event handler when user selects a channel
 components.channelList.on('select', function(data) {
@@ -95,61 +197,81 @@ components.channelList.on('select', function(data) {
     components.screen.render();
 
     // join the selected channel
-    slack.joinChannel(channelName, function(error, response, data) {
-        if (error || response.statusCode != 200) {
-            console.log('Error: ', error, response || response.statusCode);
-            return;
-        }
-
-        data = JSON.parse(data);
-        currentChannelId = data.channel.id;
-
-        // get the previous messages of the channel and display them
-        slack.getChannelHistory(currentChannelId, function(error, response, data) {
-            if (error || response.statusCode != 200) {
-                console.log('Error: ', error, response || response.statusCode);
-                return;
-            }
-
-            data = JSON.parse(data);
-            components.chatWindow.deleteTop(); // remove loading message
-
-            // filter and map the messages before displaying them
-            var messages = data.messages
-                .filter(function(item) {
-                    return (item.type === 'message');
-                });
-            messages
-                .map(function(message) {
-                    var len = users.length,
-                        username;
-
-                    // get the author
-                    for(var i=0; i < len; i++) {
-                        if (message.user === users[i].id) {
-                            username = users[i].name;
-                        }
-                    }
-
-                    return {text: message.text, username: username};
-                })
-                .forEach(function(message) {
-                    // add messages to window
-                    components.chatWindow.unshiftLine(
-                        '{bold}' + message.username + '{/bold}: ' + message.text
-                    );
-                });
-
-            // reset messageInput and give focus
-            components.messageInput.clearValue();
-            components.chatWindow.scrollTo(components.chatWindow.getLines().length);
-            components.messageInput.focus();
-            components.screen.render();
-
-            // mark the most recently read message
-            slack.markChannel(currentChannelId, messages[0].ts);
+    var selectedChannel = channels.find((chan) => chan.name === channelName);
+    if(selectedChannel.isGroup) {
+      //assume we are already part of the group
+      currentChannelId = selectedChannel.id;
+      slack.getGroupHistory(currentChannelId, (err, resp, data) => {
+        var data = JSON.parse(data);
+        updateMessages(data, () => {
+          //this would normally mark messages read or something
+          //markChannel
+          //but this is a group, so no
         });
-    });
+      });
+    } else {
+    
+      slack.joinChannel(channelName, function(error, response, data) {
+        //msnead
+          //if (error || response.statusCode != 200) {
+              //console.log('Error: ', error, response || response.statusCode);
+              //return;
+          //}
+
+          data = JSON.parse(data);
+          currentChannelId = data.channel.id;
+
+          // get the previous messages of the channel and display them
+          slack.getChannelHistory(currentChannelId, function(error, response, data) {
+            //msnead
+              //if (error || response.statusCode != 200) {
+                  //console.log('Error: ', error, response || response.statusCode);
+                  //return;
+              //}
+
+              data = JSON.parse(data);
+              //msnead
+              updateMessages(data, slack.markChannel);
+              //msnead
+              //components.chatWindow.deleteTop(); // remove loading message
+
+              //// filter and map the messages before displaying them
+              //var messages = data.messages
+                  //.filter(function(item) {
+                      //return (item.type === 'message');
+                  //});
+              //messages
+                  //.map(function(message) {
+                      //var len = users.length,
+                          //username;
+
+                      //// get the author
+                      //for(var i=0; i < len; i++) {
+                          //if (message.user === users[i].id) {
+                              //username = users[i].name;
+                          //}
+                      //}
+
+                      //return {text: message.text, username: username};
+                  //})
+                  //.forEach(function(message) {
+                      //// add messages to window
+                      //components.chatWindow.unshiftLine(
+                          //'{bold}' + message.username + '{/bold}: ' + message.text
+                      //);
+                  //});
+
+              //// reset messageInput and give focus
+              //components.messageInput.clearValue();
+              //components.chatWindow.scrollTo(components.chatWindow.getLines().length);
+              //components.messageInput.focus();
+              //components.screen.render();
+
+              //// mark the most recently read message
+              //slack.markChannel(currentChannelId, messages[0].ts);
+          });
+      });
+    }
 });
 
 // handles the reply to say that a message was successfully sent

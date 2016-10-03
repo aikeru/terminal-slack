@@ -35,6 +35,10 @@ function slackRequest(endpoint, query, callback) {
     });
 }
 
+function writeFile(fName, content) {
+  require('fs').writeFileSync(fName, content);
+}
+
 module.exports = {
     init: function(callback) {
         slackRequest('rtm.start', {}, function(error, response, data) {
@@ -45,7 +49,9 @@ module.exports = {
     },
     getChannels: function(callback) {
         slackRequest('channels.list', {}, function(error, response, data) {
-            if(callback) callback(error, response, data);
+          slackRequest('groups.list', {}, function(groupsError, groupsResponse, groupsData) {
+            if(callback) callback(error, response, data, groupsData);
+          });
         });
     },
     joinChannel: function(name, callback) {
@@ -56,6 +62,11 @@ module.exports = {
                 if(callback) callback(error, response, data);
             }
         );
+    },
+    getGroupHistory: function(id, callback) {
+      slackRequest('groups.history', {channel: id}, (err, resp, data) => {
+        if(callback) callback(err, resp, data);
+      });
     },
     getChannelHistory: function(id, callback) {
         slackRequest(
