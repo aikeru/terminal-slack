@@ -115,6 +115,22 @@ slack.getChannels(function(error, response, data, groupData){
 //slack.getUsers(function(response, error, data){
     //users = JSON.parse(data).members;
 //});
+//
+
+function getMessageText({ text, users, message }) {
+  const regEx = /\<@[A-Z0-9]+\>/g
+  //if(!text) { console.log('message?', Object.keys(message).join(','), JSON.stringify(message.files)) }
+  return text.replace(regEx, (userRef) => {
+    const userId = userRef.replace(/[\<\>@]/g, "")
+    const user = users.find(u => u.id === userId)
+    if(user) { return `{cyan-fg}${user.name}{/cyan-fg}` }
+    return userId
+  })
+    .replace(/\*(\b\w*[-']*\w*\b)\*/g, (txt) => `{bold}${txt}{/bold}`)
+    + (message.files && message.files.length ? message.files : [])
+    .reduce((tot, next) => (tot ? tot + " " : tot) + (next.name || next.title) + " " + next.url_private_download, "")
+    
+}
 
 updateMessages = function(data, markFn) {
      components.chatWindow.deleteTop(); // remove loading message
@@ -132,13 +148,14 @@ updateMessages = function(data, markFn) {
              if(message.user === currentUser.id) username = currentUser.name
              else
                  for(var i=0; i < len; i++) {
-                     if (message.user === users[i].id) {
+                     if (message.user === users[i].id || message.bot_id === users[i].id || message.team_id) {
                          username = users[i].name;
                          break;
                      }
                  }
  
-             return {text: message.text, username: username};
+             const messageText = getMessageText({ text: message.text + " " + message.user + " " + message.bot_id, users, message })
+             return {text: messageText, username: username};
          })
          .forEach(function(message) {
              // add messages to window
